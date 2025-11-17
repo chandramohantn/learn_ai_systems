@@ -124,3 +124,51 @@ class MultiHeadAttention(nn.Module):
         # Concatenate heads and put through final linear layer
         x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.embedding_size)
         return self.w_o(x)
+
+class PositionWiseFFN(nn.Module):
+    """
+    A fully connected feed-forward network applied to each position separately and identically.
+
+    Why its important: It introduces non-linearity and allows the model to learn complex transformations of the input features at each position.
+    How we build it: We use two linear layers with a ReLU activation in between, applied independently to each position in the sequence.
+    """
+    def __init__(self, embedding_size: int, hidden_size: int, dropout: float):
+        super().__init__()
+        self.linear1 = nn.Linear(embedding_size, hidden_size)
+        self.linear2 = nn.Linear(hidden_size, embedding_size)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return x
+
+class EncoderBlock(nn.Module):
+    """
+    Combines multi-head attention and the feed-forward network with residual connections and layer normalization.
+
+    Why its important: Transforms input sequences into contextualized representations. Stacking blocks allows the model to build up increasingly abstract and complex representations of the input.
+    How we build it: Wrap the MultiHeadAttention and PositionWiseFFN with residual connections and layer norm for stable training.
+    """
+    def __init__(self, embedding_size: int, n_heads: int, hidden_size: int, dropout: float):
+        super().__init__()
+        self.multi_head_attention = MultiHeadAttention(embedding_size, n_heads, dropout)
+        self.layer_norm1 = LayerNormalization(embedding_size)
+        self.position_wise_ffn = PositionWiseFFN(embedding_size, hidden_size, dropout)
+        self.layer_norm2 = LayerNormalization(embedding_size)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, mask=None):
+        # Multi-head attention sub-layer
+        attention_output = self.multi_head_attention(x, x, x, mask)
+        x = self.layer_norm1(x + self.dropout(attention_output))  # Add & Norm
+
+        # Position-wise feed-forward sub-layer
+        feed_forward_output = self.position_wise_ffn(x)
+        x = self.layer_norm2(x + self.dropout(feed_forward_output))  # Add & Norm
+        return x
+    
+class DecoderBlock(nn.Module):
