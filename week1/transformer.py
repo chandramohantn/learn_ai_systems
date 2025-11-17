@@ -8,8 +8,12 @@ class InputEmbedding(nn.Module):
     """
     Converts input token indices into dense vector representations
 
-    Why its important: Models process number and not text. Embeddings map tokens to a continuous vector space where semantic similarity is reflected by distance and direction.
-    How we build it: We use PyTorch's nn.Embedding layer and scale the outputs by the square root of the embedding dimension. This is mainly for training stability.
+    Why its important: 
+    Models process number and not text. 
+    Embeddings map tokens to a continuous vector space where semantic similarity is reflected by distance and direction.
+    How we build it: 
+    We use PyTorch's nn.Embedding layer and scale the outputs by the square root of the embedding dimension. 
+    This is mainly for training stability.
     """
     def __init__(self, embedding_size, vocab_size):
         super().__init__()
@@ -24,8 +28,11 @@ class PositionalEncoding(nn.Module):
     """
     Adds positional information to token embeddings using sinusoidal functions.
 
-    Why its important: Transformers lack inherent sequence order awareness. Positional encodings provide a way to inject order information into the model.
-    How we build it: We create a fixed positional encoding matrix using sine and cosine functions of different frequencies, then add this to the input embeddings.
+    Why its important: 
+    Transformers lack inherent sequence order awareness. Positional encodings provide a way to inject order information into the model.
+    How we build it: 
+    We create a fixed positional encoding matrix using sine and cosine functions of different frequencies, 
+    then add this to the input embeddings.
     """
     def __init__(self, embedding_size, droput: float, sequence_len=5000):
         super().__init__()
@@ -56,8 +63,11 @@ class LayerNormalization(nn.Module):
     """
     Normalizes the inputs across the features for each data point.
 
-    Why its important: Layer normalization stabilizes and accelerates training by normalizing the inputs to each layer, reducing internal covariate shift.
-    How we build it: We compute the mean and standard deviation across the feature dimension and normalize the inputs accordingly, followed by learnable scaling and shifting.
+    Why its important: 
+    Layer normalization stabilizes and accelerates training by normalizing the inputs to each layer, reducing internal covariate shift.
+    How we build it: 
+    We compute the mean and standard deviation across the feature dimension and normalize the inputs accordingly, 
+    followed by learnable scaling and shifting.
     """
     def __init__(self, embedding_size: int, eps: float=1e-6):
         super().__init__()
@@ -74,7 +84,8 @@ class LayerNormalization(nn.Module):
 class MultiHeadAttention(nn.Module):
     """
     The multi-head attention mechanism allows the model to focus on different parts of the input sequence simultaneously.
-    ANALOGY: Researching a topic (query) when you have multiple books (keys) with different content (values). Attention is like deciding which books are relevant and how much to read from each.
+    ANALOGY: Researching a topic (query) when you have multiple books (keys) with different content (values). 
+    Attention is like deciding which books are relevant and how much to read from each.
     """
     def __init__(self, embedding_size: int, n_heads: int, dropout: float):
         super().__init__()
@@ -129,8 +140,10 @@ class PositionWiseFFN(nn.Module):
     """
     A fully connected feed-forward network applied to each position separately and identically.
 
-    Why its important: It introduces non-linearity and allows the model to learn complex transformations of the input features at each position.
-    How we build it: We use two linear layers with a ReLU activation in between, applied independently to each position in the sequence.
+    Why its important: 
+    It introduces non-linearity and allows the model to learn complex transformations of the input features at each position.
+    How we build it: 
+    We use two linear layers with a ReLU activation in between, applied independently to each position in the sequence.
     """
     def __init__(self, embedding_size: int, hidden_size: int, dropout: float):
         super().__init__()
@@ -150,12 +163,15 @@ class EncoderBlock(nn.Module):
     """
     Combines multi-head attention and the feed-forward network with residual connections and layer normalization.
 
-    Why its important: Transforms input sequences into contextualized representations. Stacking blocks allows the model to build up increasingly abstract and complex representations of the input.
-    How we build it: Wrap the MultiHeadAttention and PositionWiseFFN with residual connections and layer norm for stable training.
+    Why its important: 
+    Transforms input sequences into contextualized representations. 
+    Stacking blocks allows the model to build up increasingly abstract and complex representations of the input.
+    How we build it: 
+    Wrap the MultiHeadAttention and PositionWiseFFN with residual connections and layer norm for stable training.
     """
     def __init__(self, embedding_size: int, n_heads: int, hidden_size: int, dropout: float):
         super().__init__()
-        self.multi_head_attention = MultiHeadAttention(embedding_size, n_heads, dropout)
+        self.self_attention = MultiHeadAttention(embedding_size, n_heads, dropout)
         self.layer_norm1 = LayerNormalization(embedding_size)
         self.position_wise_ffn = PositionWiseFFN(embedding_size, hidden_size, dropout)
         self.layer_norm2 = LayerNormalization(embedding_size)
@@ -163,7 +179,7 @@ class EncoderBlock(nn.Module):
         
     def forward(self, x, mask=None):
         # Multi-head attention sub-layer
-        attention_output = self.multi_head_attention(x, x, x, mask)
+        attention_output = self.self_attention(x, x, x, mask)
         x = self.layer_norm1(x + self.dropout(attention_output))  # Add & Norm
 
         # Position-wise feed-forward sub-layer
@@ -172,3 +188,64 @@ class EncoderBlock(nn.Module):
         return x
     
 class DecoderBlock(nn.Module):
+    """
+    Combines masked multi-head attention, encoder-decoder attention, 
+    and the feed-forward network with residual connections and layer normalization.
+
+    Why its important: 
+    Generates output sequences by attending to both previous outputs and encoder representations. 
+    Stacking blocks allows the model to build up increasingly abstract and complex representations of the output.
+    How we build it: 
+    Wrap the MultiHeadAttention (masked and encoder-decoder) & PositionWiseFFN with residual connections and layer norm for stable training.
+    """
+    def __init__(self, embedding_size: int, hidden_size: int, n_heads: int, dropout: float):
+        super().__init__()
+        self.self_attention = MultiHeadAttention(embedding_size, n_heads, dropout)
+        self.cross_attention = MultiHeadAttention(embedding_size, n_heads, dropout)
+        self.feed_forward = PositionWiseFFN(embedding_size, hidden_size, dropout)
+        self.norm1 = LayerNormalization(embedding_size)
+        self.norm2 = LayerNormalization(embedding_size)
+        self.norm3 = LayerNormalization(embedding_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
+        # Masked self-attention sub-layer
+        self_attention_output = self.self_attention(x, x, x, tgt_mask)
+        x = self.norm1(x + self.dropout(self_attention_output))  # Add & Norm
+
+        # Encoder-decoder attention sub-layer
+        cross_attention_output = self.cross_attention(x, encoder_output, encoder_output, src_mask)
+        x = self.norm2(x + self.dropout(cross_attention_output))  # Add & Norm
+
+        # Position-wise feed-forward sub-layer
+        feed_forward_output = self.feed_forward(x)
+        x = self.norm3(x + self.dropout(feed_forward_output))  # Add & Norm
+        return x
+    
+class Transformer(nn.Module):
+    """
+    Combine embedding layers, stack of encoder blocks and a stack of decoder blocks
+
+    Why its important: 
+    Integrate all components for end to end training.
+    How we build it: 
+    Chain embedding layers, encoder (stack of N encoder blocks), decoder (stack of N decoder blocks) followed by final linear projection.
+    """
+    def __init__(self, src_vocab_size: int, tgt_vocab_size: int, src_max_len: int, tgt_max_len: int, 
+                 embedding_size: int, n_heads: int, hidden_size: int, num_layers: int, dropout: float):
+        super().__init__()
+        self.src_embedding = InputEmbedding(embedding_size, src_vocab_size)
+        self.tgt_embedding = InputEmbedding(embedding_size, tgt_vocab_size)
+        self.src_positional_encoding = PositionalEncoding(embedding_size, dropout, src_max_len)
+        self.tgt_positional_encoding = PositionalEncoding(embedding_size, dropout, tgt_max_len)
+
+        self.encoder_layers = nn.ModuleList([
+            EncoderBlock(embedding_size, n_heads, hidden_size, dropout) for _ in range(num_layers)
+        ])
+        self.decoder_layers = nn.ModuleList([
+            DecoderBlock(embedding_size, hidden_size, n_heads, dropout) for _ in range(num_layers)
+        ])
+        self.final_linear = nn.Linear(embedding_size, tgt_vocab_size)
+        self.dropout = nn.Dropout(dropout)
+
+    
